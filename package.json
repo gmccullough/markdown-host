@@ -6,11 +6,36 @@
   "bin": {
     "markdown-host": "./src/cli.ts"
   },
+  "files": [
+    "src",
+    "tailwind.config.js"
+  ],
   "scripts": {
     "dev": "bun run src/cli.ts",
     "build:css": "bunx tailwindcss -i ./src/styles/main.css -o ./src/styles/output.css --minify",
     "build": "bun run build:css && bun build --compile --target=bun src/cli.ts --outfile=markdown-host",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build:css"
+  },
+  "keywords": [
+    "markdown",
+    "documentation",
+    "mermaid",
+    "cli",
+    "server",
+    "docs"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gmccullough/markdown-host.git"
+  },
+  "homepage": "https://github.com/gmccullough/markdown-host#readme",
+  "bugs": {
+    "url": "https://github.com/gmccullough/markdown-host/issues"
+  },
+  "license": "MIT",
+  "engines": {
+    "bun": ">=1.0.0"
   },
   "dependencies": {
     "chokidar": "^3.6.0",
