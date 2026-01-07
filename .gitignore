@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+src/styles/output.css
+markdown-host
+
+# Test artifacts
+test-results/
+playwright-report/
+playwright/.cache/
+
+# SSL certificates
+*.crt
+*.key
+
+# OS files
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment
+.env
+.env.*

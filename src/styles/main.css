@@ -1,0 +1,112 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+@layer components {
+  /* Navigation tree styles */
+  .nav-item {
+    @apply flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer transition-colors;
+  }
+
+  .nav-item.active {
+    @apply bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-medium;
+  }
+
+  .nav-folder {
+    @apply font-medium text-gray-900 dark:text-gray-100;
+  }
+
+  .nav-children {
+    @apply ml-4 border-l border-gray-200 dark:border-gray-700 pl-2;
+  }
+
+  /* Mermaid diagram container - keep light background in dark mode for chart readability */
+  .mermaid-container {
+    @apply relative my-6 border border-gray-200 dark:border-gray-600 rounded-lg overflow-hidden;
+    background-color: #fff;
+  }
+
+  .dark .mermaid-container {
+    background-color: #eee;
+  }
+
+  .mermaid-controls {
+    @apply flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 text-sm;
+  }
+
+  .mermaid-controls button {
+    @apply px-2 py-1 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition-colors;
+  }
+
+  .mermaid-controls button:disabled {
+    @apply opacity-50 cursor-not-allowed;
+  }
+
+  .mermaid-viewport {
+    @apply overflow-auto p-4 flex items-center justify-center;
+    min-height: 200px;
+    max-height: 70vh;
+    height: 400px;
+  }
+
+  .mermaid-diagram {
+    @apply transition-transform duration-200 origin-center;
+  }
+
+  /* Fullscreen mode - use :fullscreen pseudo-class for native fullscreen API */
+  .mermaid-container:fullscreen,
+  .mermaid-container:-webkit-full-screen {
+    @apply fixed inset-0 z-50 rounded-none border-0 w-screen h-screen;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .mermaid-container:fullscreen .mermaid-controls,
+  .mermaid-container:-webkit-full-screen .mermaid-controls {
+    @apply flex-shrink-0;
+  }
+
+  .mermaid-container:fullscreen .mermaid-viewport,
+  .mermaid-container:-webkit-full-screen .mermaid-viewport {
+    @apply flex-1 h-auto;
+    height: calc(100vh - 48px) !important;
+    max-height: none !important;
+  }
+
+  /* Code blocks */
+  pre:not(.mermaid-source) {
+    @apply rounded-lg overflow-x-auto p-4;
+    background-color: #eee !important;
+  }
+
+  .dark pre:not(.mermaid-source) {
+    background-color: #ddd !important;
+  }
+
+  /* Scrollbar styling */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    @apply w-2 h-2;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 dark:bg-gray-600 rounded-full;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-400 dark:bg-gray-500;
+  }
+}
