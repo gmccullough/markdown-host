@@ -44,4 +44,7 @@ export interface ContentSource {
 
   /** Get the site title */
   getTitle(): Promise<string>;
+
+  /** Get URL-safe slug for this source */
+  getSlug(): string;
 }

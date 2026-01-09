@@ -26,27 +26,49 @@ function findGitRoot(startPath: string): string | null {
 }
 
 /**
- * Common acronyms that should be fully capitalized
+ * Known acronyms that contain vowels (consonant-only ones are auto-detected)
  */
-const ACRONYMS = new Set([
-  "api", "ui", "url", "uri", "html", "css", "js", "ts", "json", "xml",
-  "http", "https", "rest", "graphql", "sql", "db", "id", "uuid", "jwt",
-  "oauth", "ssh", "ssl", "tls", "dns", "tcp", "udp", "ip", "cdn", "cli",
-  "sdk", "aws", "gcp", "ci", "cd", "qa", "ux", "seo", "cms", "crm", "erp",
-  "pdf", "svg", "png", "gif", "jpg", "csv", "yaml", "toml", "md",
+const VOWEL_ACRONYMS = new Set([
+  "ai", "api", "ui", "ux", "uri", "url", "io", "os",
+  "aws", "gcp", "ide", "oauth", "saas", "paas", "iaas",
+  "uuid", "guid", "yaml", "toml",
+  "html", "css", "json", "xml", "sql", "graphql", "rest",
+  "http", "https", "tcp", "udp", "ip", "dns", "ssl", "tls",
+  "jwt", "ssh", "seo", "cms", "crm", "erp", "iot",
+  "pdf", "svg", "png", "gif", "jpg", "jpeg", "csv", "md",
 ]);
+
+/**
+ * Check if a word should be fully capitalized as an acronym
+ * - Known vowel-containing acronyms from explicit list
+ * - 2-3 letter words with no vowels (likely acronyms: ml, db, vm, cdn, etc.)
+ */
+function isAcronym(word: string): boolean {
+  const lower = word.toLowerCase();
+
+  // Check explicit list (for vowel-containing acronyms)
+  if (VOWEL_ACRONYMS.has(lower)) return true;
+
+  // 2-3 letter words with no vowels are likely acronyms
+  if (lower.length >= 2 && lower.length <= 3 && !/[aeiou]/.test(lower)) {
+    return true;
+  }
+
+  return false;
+}
 
 /**
  * Humanize a filename into a display name
  * e.g., "provider-authentication" -> "Provider Authentication"
  * e.g., "headless-ui" -> "Headless UI"
+ * e.g., "ml-models" -> "ML Models"
  */
 function humanize(filename: string): string {
   return filename
     .replace(/[-_]/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase())
     .replace(/\b\w+\b/g, (word) =>
-      ACRONYMS.has(word.toLowerCase()) ? word.toUpperCase() : word
+      isAcronym(word) ? word.toUpperCase() : word
     );
 }
 
@@ -282,6 +304,14 @@ export class FilesystemSource implements ContentSource {
       this.watcher.close();
       this.watcher = null;
     }
+  }
+
+  /**
+   * Get a URL-safe slug for this source
+   * e.g., "api-docs" from "/path/to/api-docs"
+   */
+  getSlug(): string {
+    return basename(this.rootPath).toLowerCase().replace(/[^a-z0-9]+/g, "-");
   }
 
   async getTitle(): Promise<string> {

@@ -2,30 +2,162 @@
 
 import { parseArgs } from "util";
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, dirname, join } from "node:path";
 import { watch } from "chokidar";
 import { FilesystemSource } from "./content/filesystem";
 import { createServer, warmUp } from "./server";
+
+const CONFIG_FILENAME = ".markdown-host.json";
+
+interface Config {
+  roots: (string | { path: string; name?: string })[];
+  port?: number;
+  auth?: string;
+}
+
+/**
+ * Find config file by walking up from cwd
+ */
+function findConfig(startDir: string): string | null {
+  let current = resolve(startDir);
+  const root = resolve("/");
+
+  while (current !== root) {
+    const configPath = join(current, CONFIG_FILENAME);
+    if (existsSync(configPath)) {
+      return configPath;
+    }
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  return null;
+}
+
+/**
+ * Load and parse config file, resolving relative paths
+ */
+function loadConfig(configPath: string): Config {
+  const configDir = dirname(configPath);
+  const raw = readFileSync(configPath, "utf-8");
+
+  let config: Config;
+  try {
+    config = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`Invalid JSON in ${configPath}: ${e}`);
+  }
+
+  if (!config.roots || !Array.isArray(config.roots) || config.roots.length === 0) {
+    throw new Error(`Config must have a non-empty "roots" array`);
+  }
+
+  // Resolve relative paths from config file location
+  config.roots = config.roots.map((root) => {
+    if (typeof root === "string") {
+      return resolve(configDir, root);
+    } else {
+      return { ...root, path: resolve(configDir, root.path) };
+    }
+  });
+
+  return config;
+}
+
+/**
+ * Generate a URL-safe slug from path segments
+ */
+function slugify(segments: string[]): string {
+  return segments.join("-").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+/**
+ * Generate unique slugs for paths, disambiguating by including parent directories when needed
+ */
+function generateUniqueSlugs(absolutePaths: string[]): Map<string, string> {
+  const result = new Map<string, string>();
+
+  // Split each path into segments (reversed for easy access from end)
+  const pathSegments = absolutePaths.map(p => p.split("/").filter(Boolean).reverse());
+
+  // Track how many segments we're using for each path (start with 1 = just basename)
+  const segmentCounts = new Array(absolutePaths.length).fill(1);
+
+  let hasConflicts = true;
+  while (hasConflicts) {
+    hasConflicts = false;
+
+    // Generate current slugs
+    const currentSlugs = pathSegments.map((segments, i) =>
+      slugify(segments.slice(0, segmentCounts[i]).reverse())
+    );
+
+    // Find conflicts
+    const slugGroups = new Map<string, number[]>();
+    currentSlugs.forEach((slug, i) => {
+      if (!slugGroups.has(slug)) slugGroups.set(slug, []);
+      slugGroups.get(slug)!.push(i);
+    });
+
+    // Expand conflicting slugs
+    for (const [, indices] of slugGroups) {
+      if (indices.length > 1) {
+        hasConflicts = true;
+        for (const i of indices) {
+          // Only expand if we have more segments available
+          if (segmentCounts[i] < pathSegments[i].length) {
+            segmentCounts[i]++;
+          }
+        }
+      }
+    }
+  }
+
+  // Build final result
+  absolutePaths.forEach((path, i) => {
+    const slug = slugify(pathSegments[i].slice(0, segmentCounts[i]).reverse());
+    result.set(path, slug);
+  });
+
+  return result;
+}
 
 const HELP = `
 markdown-host - Serve markdown documentation with mermaid support
 
 USAGE:
-  markdown-host <path> [options]
+  markdown-host [options]
+  markdown-host <path>... [options]
 
 ARGUMENTS:
-  <path>              Path to the markdown documentation root
+  <path>...             One or more paths to markdown documentation roots
+                        (if omitted, uses ${CONFIG_FILENAME})
 
 OPTIONS:
-  -p, --port <port>   Port to listen on (default: 3000)
-  -a, --auth <creds>  Basic auth credentials (format: user:password)
-  -o, --open          Open browser on start
-  -h, --help          Show this help message
+  -c, --config <file>   Path to config file (default: find ${CONFIG_FILENAME})
+  -p, --port <port>     Port to listen on (default: 3000)
+  -a, --auth <creds>    Basic auth credentials (format: user:password)
+  -o, --open            Open browser on start
+  -h, --help            Show this help message
+
+CONFIG FILE (${CONFIG_FILENAME}):
+  {
+    "roots": [
+      "./relative/path",
+      "/absolute/path",
+      { "path": "./docs", "name": "Custom Name" }
+    ],
+    "port": 3000,
+    "auth": "user:pass"
+  }
 
 EXAMPLES:
-  markdown-host ./docs
-  markdown-host ./docs --port 8080
-  markdown-host ./docs --auth admin:secret
+  markdown-host                           # Use config file
+  markdown-host --port 8080               # Use config file, override port
+  markdown-host ./docs                    # Explicit path (ignores config)
+  markdown-host ./docs ./specs            # Multiple explicit paths
+  markdown-host --config ~/my-config.json # Specific config file
 
 ENVIRONMENT:
   MARKDOWN_HOST_AUTH  Basic auth credentials (alternative to --auth)
@@ -35,7 +167,8 @@ async function main() {
   const { values, positionals } = parseArgs({
     args: Bun.argv.slice(2),
     options: {
-      port: { type: "string", short: "p", default: "3000" },
+      config: { type: "string", short: "c" },
+      port: { type: "string", short: "p" },
       auth: { type: "string", short: "a" },
       open: { type: "boolean", short: "o", default: false },
       help: { type: "boolean", short: "h", default: false },
@@ -48,28 +181,74 @@ async function main() {
     process.exit(0);
   }
 
-  const docPath = positionals[0];
+  let absolutePaths: string[] = [];
+  let configPort: number | undefined;
+  let configAuth: string | undefined;
 
-  if (!docPath) {
-    console.error("Error: No path provided\n");
-    console.log(HELP);
-    process.exit(1);
+  // If explicit paths provided, use them (skip config)
+  if (positionals.length > 0) {
+    for (const docPath of positionals) {
+      const absolutePath = resolve(docPath);
+      if (!existsSync(absolutePath)) {
+        console.error(`Error: Path does not exist: ${absolutePath}`);
+        process.exit(1);
+      }
+      absolutePaths.push(absolutePath);
+    }
+  } else {
+    // No paths provided - look for config file
+    const configPath = values.config
+      ? resolve(values.config)
+      : findConfig(process.cwd());
+
+    if (!configPath) {
+      console.error(`Error: No paths provided and no ${CONFIG_FILENAME} found\n`);
+      console.log(HELP);
+      process.exit(1);
+    }
+
+    if (!existsSync(configPath)) {
+      console.error(`Error: Config file not found: ${configPath}`);
+      process.exit(1);
+    }
+
+    console.log(`Using config: ${configPath}`);
+
+    const config = loadConfig(configPath);
+    configPort = config.port;
+    configAuth = config.auth;
+
+    // Validate all paths from config
+    for (const root of config.roots) {
+      const rootPath = typeof root === "string" ? root : root.path;
+      if (!existsSync(rootPath)) {
+        console.error(`Error: Path does not exist: ${rootPath}`);
+        process.exit(1);
+      }
+      absolutePaths.push(rootPath);
+    }
   }
 
-  const absolutePath = resolve(docPath);
-
-  if (!existsSync(absolutePath)) {
-    console.error(`Error: Path does not exist: ${absolutePath}`);
-    process.exit(1);
-  }
-
-  const port = parseInt(values.port!, 10);
+  // CLI args override config values
+  const portStr = values.port ?? configPort?.toString() ?? "3000";
+  const port = parseInt(portStr, 10);
   if (isNaN(port) || port < 1 || port > 65535) {
-    console.error(`Error: Invalid port: ${values.port}`);
+    console.error(`Error: Invalid port: ${portStr}`);
     process.exit(1);
   }
 
-  const auth = values.auth || process.env.MARKDOWN_HOST_AUTH;
+  const auth = values.auth || configAuth || process.env.MARKDOWN_HOST_AUTH;
+
+  // Generate unique slugs (auto-disambiguates by including parent dirs when needed)
+  const pathToSlug = generateUniqueSlugs(absolutePaths);
+
+  // Create sources with their slugs
+  const sources = new Map<string, FilesystemSource>();
+  for (const absolutePath of absolutePaths) {
+    const source = new FilesystemSource(absolutePath);
+    const slug = pathToSlug.get(absolutePath)!;
+    sources.set(slug, source);
+  }
 
   // Load Tailwind CSS - use function for hot reload support
   const cssPath = new URL("./styles/output.css", import.meta.url).pathname;
@@ -92,17 +271,17 @@ async function main() {
   };
 
   console.log("Starting markdown-host...");
-  console.log(`  Path: ${absolutePath}`);
+  for (const absolutePath of absolutePaths) {
+    const slug = pathToSlug.get(absolutePath)!;
+    console.log(`  /${slug}: ${absolutePath}`);
+  }
 
   // Warm up the highlighter
   await warmUp();
 
-  // Create content source
-  const contentSource = new FilesystemSource(absolutePath);
-
   // Create server
   const { app, websocket, broadcastReload } = createServer({
-    contentSource,
+    sources,
     auth,
     styles: getStyles,
   });
@@ -144,18 +323,22 @@ async function main() {
   }
 
   // Handle graceful shutdown
-  process.on("SIGINT", () => {
-    console.log("\nShutting down...");
-    contentSource.unwatch();
+  const shutdown = () => {
+    for (const source of sources.values()) {
+      source.unwatch();
+    }
     cssWatcher?.close();
     server.stop();
+  };
+
+  process.on("SIGINT", () => {
+    console.log("\nShutting down...");
+    shutdown();
     process.exit(0);
   });
 
   process.on("SIGTERM", () => {
-    contentSource.unwatch();
-    cssWatcher?.close();
-    server.stop();
+    shutdown();
     process.exit(0);
   });
 }

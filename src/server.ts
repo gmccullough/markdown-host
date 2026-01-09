@@ -8,11 +8,12 @@ import {
   render404,
   renderGeneratedIndex,
   renderLayout,
+  renderHubPage,
 } from "./render/layout";
 import { getHighlighter } from "./render/highlight";
 
 export interface ServerOptions {
-  contentSource: ContentSource;
+  sources: Map<string, ContentSource>;
   auth?: string;
   styles: string | (() => string);
 }
@@ -22,10 +23,11 @@ interface WSData {
 }
 
 export function createServer(options: ServerOptions) {
-  const { contentSource, auth, styles } = options;
+  const { sources, auth, styles } = options;
   const { upgradeWebSocket, websocket } = createBunWebSocket<WSData>();
 
   const app = new Hono();
+  const isMultiRoot = sources.size > 1;
 
   // Track WebSocket connections for hot reload
   const connections = new Set<ServerWebSocket<WSData>>();
@@ -57,11 +59,13 @@ export function createServer(options: ServerOptions) {
     }
   };
 
-  // Set up file watching
-  contentSource.watch(() => {
-    console.log("File change detected, reloading...");
-    broadcastReload();
-  });
+  // Set up file watching for all sources
+  for (const source of sources.values()) {
+    source.watch(() => {
+      console.log("File change detected, reloading...");
+      broadcastReload();
+    });
+  }
 
   // Serve pages
   app.get("*", async (c) => {
@@ -72,17 +76,49 @@ export function createServer(options: ServerOptions) {
       return c.text("WebSocket endpoint", 400);
     }
 
-    // Resolve styles - call function if it's a function (for hot reload)
+    // Resolve styles
     const resolvedStyles = typeof styles === "function" ? styles() : styles;
 
-    const siteTitle = await contentSource.getTitle();
-    const nav = await contentSource.getTree();
+    // Build sources info for layout
+    const sourcesInfo = await Promise.all(
+      Array.from(sources.entries()).map(async ([slug, source]) => ({
+        slug,
+        title: await source.getTitle(),
+      }))
+    );
 
-    // Try to get content for this path
-    let content = await contentSource.getContent(path);
+    // Single source mode: original behavior
+    if (!isMultiRoot) {
+      const [slug, source] = Array.from(sources.entries())[0];
+      return handleSingleSource(c, source, path, resolvedStyles);
+    }
 
-    // If no content and this is the root, generate an index
-    if (!content && path === "/") {
+    // Multi-root mode
+    // Root path shows hub page
+    if (path === "/") {
+      return c.html(renderHubPage(sourcesInfo, resolvedStyles));
+    }
+
+    // Parse slug from path: /:slug/rest/of/path
+    const pathParts = path.split("/").filter(Boolean);
+    const slug = pathParts[0];
+    const source = sources.get(slug);
+
+    if (!source) {
+      return c.html(render404("Documentation", resolvedStyles), 404);
+    }
+
+    // Get content path (everything after slug)
+    const contentPath = "/" + pathParts.slice(1).join("/") || "/";
+
+    const siteTitle = await source.getTitle();
+    const nav = await source.getTree();
+
+    // Try to get content
+    let content = await source.getContent(contentPath);
+
+    // If no content and this is the root of the source, generate an index
+    if (!content && contentPath === "/") {
       const indexMarkdown = renderGeneratedIndex(nav, siteTitle, resolvedStyles);
       const html = await renderMarkdown(indexMarkdown, { currentPath: path });
 
@@ -94,6 +130,8 @@ export function createServer(options: ServerOptions) {
           nav,
           currentPath: path,
           styles: resolvedStyles,
+          sources: sourcesInfo,
+          currentSlug: slug,
         })
       );
     }
@@ -114,11 +152,63 @@ export function createServer(options: ServerOptions) {
         nav,
         currentPath: path,
         styles: resolvedStyles,
+        sources: sourcesInfo,
+        currentSlug: slug,
       })
     );
   });
 
   return { app, websocket, broadcastReload };
+}
+
+/**
+ * Handle single source mode (original behavior, no URL prefix)
+ */
+async function handleSingleSource(
+  c: any,
+  source: ContentSource,
+  path: string,
+  styles: string
+) {
+  const siteTitle = await source.getTitle();
+  const nav = await source.getTree();
+
+  let content = await source.getContent(path);
+
+  // If no content and this is the root, generate an index
+  if (!content && path === "/") {
+    const indexMarkdown = renderGeneratedIndex(nav, siteTitle, styles);
+    const html = await renderMarkdown(indexMarkdown, { currentPath: path });
+
+    return c.html(
+      renderLayout({
+        title: siteTitle,
+        siteTitle,
+        content: html,
+        nav,
+        currentPath: path,
+        styles,
+      })
+    );
+  }
+
+  if (!content) {
+    return c.html(render404(siteTitle, styles), 404);
+  }
+
+  const html = await renderMarkdown(content.body, { currentPath: path });
+  const pageTitle = content.frontmatter.title || siteTitle;
+
+  return c.html(
+    renderLayout({
+      title: String(pageTitle),
+      siteTitle,
+      content: html,
+      nav,
+      currentPath: path,
+      styles,
+    })
+  );
 }
 
 /**

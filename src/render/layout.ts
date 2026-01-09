@@ -1,5 +1,10 @@
 import type { NavNode } from "../content/types";
 
+export interface SourceInfo {
+  slug: string;
+  title: string;
+}
+
 export interface LayoutOptions {
   title: string;
   siteTitle: string;
@@ -7,6 +12,10 @@ export interface LayoutOptions {
   nav: NavNode[];
   currentPath: string;
   styles: string;
+  /** Available sources for multi-root mode */
+  sources?: SourceInfo[];
+  /** Current source slug in multi-root mode */
+  currentSlug?: string;
 }
 
 /**
@@ -19,19 +28,22 @@ function shouldBeOpen(folderPath: string, currentPath: string): boolean {
 /**
  * Render navigation tree as HTML
  * Server-side renders the correct open/closed state to prevent flicker
+ * @param pathPrefix - Optional prefix for all links (e.g., "/docs" in multi-root mode)
  */
-function renderNav(nodes: NavNode[], currentPath: string, depth = 0): string {
+function renderNav(nodes: NavNode[], currentPath: string, pathPrefix = "", depth = 0): string {
   if (nodes.length === 0) return "";
 
   const items = nodes
     .map((node) => {
-      const isActive = currentPath === node.path;
+      // In multi-root mode, links need the slug prefix
+      const linkPath = pathPrefix ? `${pathPrefix}${node.path}` : node.path;
+      const isActive = currentPath === linkPath;
       const hasChildren = node.type === "directory" && node.children?.length;
 
       if (node.type === "directory") {
         // Pre-compute if this folder should be open
-        const isOpen = shouldBeOpen(node.path, currentPath);
-        const escapedPath = node.path.replace(/'/g, "\\'");
+        const isOpen = shouldBeOpen(linkPath, currentPath);
+        const escapedPath = linkPath.replace(/'/g, "\\'");
 
         return `
           <div class="nav-folder-container">
@@ -56,14 +68,14 @@ function renderNav(nodes: NavNode[], currentPath: string, depth = 0): string {
               x-show="isOpen('${escapedPath}')"
               ${isOpen ? '' : 'style="display: none;"'}
             >
-              ${hasChildren ? renderNav(node.children!, currentPath, depth + 1) : ""}
+              ${hasChildren ? renderNav(node.children!, currentPath, pathPrefix, depth + 1) : ""}
             </div>
           </div>
         `;
       } else {
         return `
           <a
-            href="${node.path}"
+            href="${linkPath}"
             class="nav-item ${isActive ? "active" : ""}"
           >
             <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -472,9 +484,11 @@ function getClientScript(): string {
  * Render the full HTML page
  */
 export function renderLayout(options: LayoutOptions): string {
-  const { title, siteTitle, content, nav, currentPath, styles } = options;
-  const navHtml = renderNav(nav, currentPath);
+  const { title, siteTitle, content, nav, currentPath, styles, sources, currentSlug } = options;
+  const pathPrefix = currentSlug ? `/${currentSlug}` : "";
+  const navHtml = renderNav(nav, currentPath, pathPrefix);
   const clientScript = getClientScript();
+  const isMultiRoot = sources && sources.length > 1;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -514,7 +528,18 @@ export function renderLayout(options: LayoutOptions): string {
     >
       <!-- Header -->
       <div class="p-4 border-b border-gray-200 dark:border-gray-700">
-        <a href="/" class="font-semibold text-lg">${siteTitle}</a>
+        ${isMultiRoot ? `
+          <select
+            class="w-full font-semibold text-lg bg-transparent border-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500 rounded"
+            onchange="window.location.href = '/' + this.value"
+          >
+            ${sources!.map(s => `
+              <option value="${s.slug}" ${s.slug === currentSlug ? 'selected' : ''}>${s.title}</option>
+            `).join('')}
+          </select>
+        ` : `
+          <a href="/" class="font-semibold text-lg">${siteTitle}</a>
+        `}
       </div>
 
       <!-- Navigation -->
@@ -614,4 +639,53 @@ export function renderGeneratedIndex(
   const markdown = `# ${siteTitle}\n\n## Documents\n\n${renderLinks(nav)}`;
 
   return markdown;
+}
+
+/**
+ * Render hub page for multi-root mode (shown at "/")
+ */
+export function renderHubPage(sources: SourceInfo[], styles: string): string {
+  const clientScript = getClientScript();
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Documentation</title>
+  <style>${styles}</style>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body class="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen" x-data="darkMode()" x-init="init()">
+  <div class="max-w-4xl mx-auto p-8 lg:p-12">
+    <div class="flex justify-between items-center mb-8">
+      <h1 class="text-3xl font-bold">Documentation</h1>
+      <button
+        @click="toggle()"
+        class="p-2 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700"
+        title="Toggle dark mode"
+      >
+        <svg x-show="!dark" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+        </svg>
+        <svg x-show="dark" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+        </svg>
+      </button>
+    </div>
+    <div class="grid gap-4 sm:grid-cols-2">
+      ${sources.map(s => `
+        <a
+          href="/${s.slug}"
+          class="block p-6 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-500 dark:hover:border-blue-400 hover:shadow-md transition-all"
+        >
+          <h2 class="text-xl font-semibold mb-2">${s.title}</h2>
+          <span class="text-sm text-gray-500 dark:text-gray-400">/${s.slug}</span>
+        </a>
+      `).join('')}
+    </div>
+  </div>
+  <script>${clientScript}</script>
+</body>
+</html>`;
 }
