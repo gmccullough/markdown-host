@@ -1,6 +1,6 @@
 {
   "name": "markdown-host",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Self-contained CLI webserver for markdown documentation with mermaid support",
   "type": "module",
   "bin": {
