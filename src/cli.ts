@@ -190,10 +190,10 @@ async function main() {
     for (const docPath of positionals) {
       const absolutePath = resolve(docPath);
       if (!existsSync(absolutePath)) {
-        console.error(`Error: Path does not exist: ${absolutePath}`);
-        process.exit(1);
+        console.warn(`Warning: Path does not exist, skipping: ${absolutePath}`);
+      } else {
+        absolutePaths.push(absolutePath);
       }
-      absolutePaths.push(absolutePath);
     }
   } else {
     // No paths provided - look for config file
@@ -218,15 +218,21 @@ async function main() {
     configPort = config.port;
     configAuth = config.auth;
 
-    // Validate all paths from config
+    // Validate paths from config, warn on missing
     for (const root of config.roots) {
       const rootPath = typeof root === "string" ? root : root.path;
       if (!existsSync(rootPath)) {
-        console.error(`Error: Path does not exist: ${rootPath}`);
-        process.exit(1);
+        console.warn(`Warning: Path does not exist, skipping: ${rootPath}`);
+      } else {
+        absolutePaths.push(rootPath);
       }
-      absolutePaths.push(rootPath);
     }
+  }
+
+  // Ensure at least one valid path
+  if (absolutePaths.length === 0) {
+    console.error("Error: No valid paths found. All specified directories are missing.");
+    process.exit(1);
   }
 
   // CLI args override config values
